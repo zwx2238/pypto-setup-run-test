@@ -26,7 +26,7 @@ By default, the script keeps sources and runtime state inside this repo instead 
 pypto-setup-run-test/
   setup_and_run_test.sh
   repos/
-    pypto/                 # put an existing checkout here, or let the script clone it
+    pypto/                 # cloned automatically by default if missing
     akg/                   # cloned automatically by default if missing
   .local/
     venv/                  # default Python install target
@@ -45,10 +45,10 @@ You can override any of those paths with command-line arguments, but the default
 - Linux shell environment
 - `python3` with `venv`
 - `git`
-- PyPTO source code, either:
+- PyPTO source code:
+  - cloned automatically from `https://gitcode.com/cann/pypto` into `repos/pypto` by default, or
   - already present at `repos/pypto`, or
-  - provided via `--pypto-root`, or
-  - clonable via `--pypto-git-url`
+  - provided via `--pypto-root`
 - Optional but typical:
   - local `akg` checkout, otherwise the script clones it into `repos/akg`
   - CANN environment or permission to install it locally
@@ -62,13 +62,15 @@ Run with defaults:
 bash setup_and_run_test.sh
 ```
 
+With no arguments, the script will clone PyPTO from `https://gitcode.com/cann/pypto` into `repos/pypto` if needed, then check out commit `ed805084a3f00252f0ffb6ace3ee10a478ea3567` from the recorded workflow.
+
 Use a different `pypto` path and device id:
 
 ```bash
 bash setup_and_run_test.sh --pypto-root /path/to/pypto --device-id 1
 ```
 
-Clone PyPTO into the repo-local `repos/pypto` path:
+Override the default PyPTO source or ref:
 
 ```bash
 bash setup_and_run_test.sh --pypto-git-url <pypto_git_url> --pypto-git-ref main
@@ -91,5 +93,6 @@ bash setup_and_run_test.sh --help
 - The script prefers reusing existing downloads and installs unless `--force-prepare` is specified.
 - By default, `pip install` goes into `.local/venv`, not into your user-level Python environment.
 - The script exports a repo-local `HOME` so tools that would normally write under `~` use `.local/state/home` instead.
+- If `repos/pypto` is missing, the script clones `https://gitcode.com/cann/pypto` automatically and checks out the history-based commit `ed805084a3f00252f0ffb6ace3ee10a478ea3567`.
 - If `akg_agents/.env` exists, it is loaded automatically.
 - The script checks out KernelBench commit `21fbe5a642898cd60b8f60c7aefb43d475e11f33` to match the recorded workflow.

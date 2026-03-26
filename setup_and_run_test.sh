@@ -22,8 +22,8 @@ PYPTO_GIT_REF_REQUESTED=false
 if [[ -n "${PYPTO_GIT_REF+x}" ]]; then
     PYPTO_GIT_REF_REQUESTED=true
 fi
-PYPTO_GIT_URL="${PYPTO_GIT_URL:-}"
-PYPTO_GIT_REF="${PYPTO_GIT_REF:-}"
+PYPTO_GIT_URL="${PYPTO_GIT_URL:-https://gitcode.com/cann/pypto}"
+PYPTO_GIT_REF="${PYPTO_GIT_REF:-ed805084a3f00252f0ffb6ace3ee10a478ea3567}"
 DEVICE_TYPE="a2"
 DEVICE_ID="${DEVICE_ID:-0}"
 PYPTO_INSTALL_MODE="wheel"
@@ -89,8 +89,8 @@ Options:
   --venv-root PATH              Local virtualenv directory (default: ${VENV_ROOT})
   --no-venv                     Disable the local virtualenv and use --python directly
   --pypto-root PATH             Local pypto repository root (default: ${PYPTO_ROOT})
-  --pypto-git-url URL           Clone PyPTO into --pypto-root when missing
-  --pypto-git-ref REF           Checkout this PyPTO branch/tag/commit after clone or on existing git repo
+  --pypto-git-url URL           PyPTO clone URL when --pypto-root is missing (default: ${PYPTO_GIT_URL})
+  --pypto-git-ref REF           PyPTO branch/tag/commit to use for new clones, or on existing git repo when explicitly requested (default: ${PYPTO_GIT_REF})
   --device-type a2|a3           Device type for prepare_env.sh (default: ${DEVICE_TYPE})
   --device-id N                 Export DEVICE_ID and TILE_FWK_DEVICE_ID (default: ${DEVICE_ID})
   --pypto-install-mode MODE     wheel|editable (default: ${PYPTO_INSTALL_MODE})
@@ -117,6 +117,7 @@ Options:
 Examples:
   $(basename "$0")
   $(basename "$0") --pypto-root /path/to/pypto --device-id 1
+  $(basename "$0") --pypto-git-ref main
   $(basename "$0") --pypto-git-url <pypto_git_url> --pypto-git-ref main
   $(basename "$0") --pypto-install-mode editable -- --maxfail=1 -x
 EOF
@@ -377,10 +378,9 @@ ensure_git_repo() {
     [[ -n "${repo_url}" ]] || die "${repo_name} repo not found at ${repo_root}. Provide --${repo_name}-git-url or --${repo_name}-root."
 
     ensure_dir "$(dirname "${repo_root}")"
+    run_cmd git clone "${repo_url}" "${repo_root}"
     if [[ -n "${repo_ref}" ]]; then
-        run_cmd git clone --branch "${repo_ref}" "${repo_url}" "${repo_root}"
-    else
-        run_cmd git clone "${repo_url}" "${repo_root}"
+        run_cmd git -C "${repo_root}" checkout "${repo_ref}"
     fi
 }
 
@@ -397,13 +397,10 @@ ensure_pypto_repo() {
         die "PyPTO root exists but does not look usable: ${PYPTO_ROOT}"
     fi
 
-    [[ -n "${PYPTO_GIT_URL}" ]] || die "PyPTO repo not found at ${PYPTO_ROOT}. Put a checkout there, pass --pypto-root, or provide --pypto-git-url."
-
     ensure_dir "$(dirname "${PYPTO_ROOT}")"
+    run_cmd git clone "${PYPTO_GIT_URL}" "${PYPTO_ROOT}"
     if [[ -n "${PYPTO_GIT_REF}" ]]; then
-        run_cmd git clone --branch "${PYPTO_GIT_REF}" "${PYPTO_GIT_URL}" "${PYPTO_ROOT}"
-    else
-        run_cmd git clone "${PYPTO_GIT_URL}" "${PYPTO_ROOT}"
+        run_cmd git -C "${PYPTO_ROOT}" checkout "${PYPTO_GIT_REF}"
     fi
 
     [[ -f "${PYPTO_ROOT}/tools/prepare_env.sh" ]] || die "Missing ${PYPTO_ROOT}/tools/prepare_env.sh after PyPTO clone"
