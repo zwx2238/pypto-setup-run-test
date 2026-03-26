@@ -3,10 +3,27 @@
 set -euo pipefail
 
 SELF_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORK_ROOT="${WORK_ROOT:-$(cd "${SELF_ROOT}/.." && pwd)}"
+WORK_ROOT="${WORK_ROOT:-${SELF_ROOT}}"
+RUNTIME_ROOT="${RUNTIME_ROOT:-${WORK_ROOT}/.local}"
+SOURCE_ROOT="${SOURCE_ROOT:-${WORK_ROOT}/repos}"
+STATE_ROOT="${STATE_ROOT:-${RUNTIME_ROOT}/state}"
+CACHE_ROOT="${CACHE_ROOT:-${RUNTIME_ROOT}/cache}"
+HOME_ROOT="${HOME_ROOT:-${STATE_ROOT}/home}"
+XDG_CACHE_ROOT="${XDG_CACHE_ROOT:-${CACHE_ROOT}/xdg}"
+XDG_CONFIG_ROOT="${XDG_CONFIG_ROOT:-${STATE_ROOT}/config}"
+XDG_DATA_ROOT="${XDG_DATA_ROOT:-${STATE_ROOT}/share}"
+BOOTSTRAP_PYTHON_BIN="${PYTHON_BIN:-${BOOTSTRAP_PYTHON_BIN:-python3}}"
+PYTHON_BIN="${BOOTSTRAP_PYTHON_BIN}"
+VENV_ROOT="${VENV_ROOT:-${RUNTIME_ROOT}/venv}"
+USE_VENV=true
 
-PYTHON_BIN="${PYTHON_BIN:-python3}"
-PYPTO_ROOT="${PYPTO_ROOT:-${WORK_ROOT}/pypto}"
+PYPTO_ROOT="${PYPTO_ROOT:-${SOURCE_ROOT}/pypto}"
+PYPTO_GIT_REF_REQUESTED=false
+if [[ -n "${PYPTO_GIT_REF+x}" ]]; then
+    PYPTO_GIT_REF_REQUESTED=true
+fi
+PYPTO_GIT_URL="${PYPTO_GIT_URL:-}"
+PYPTO_GIT_REF="${PYPTO_GIT_REF:-}"
 DEVICE_TYPE="a2"
 DEVICE_ID="${DEVICE_ID:-0}"
 PYPTO_INSTALL_MODE="wheel"
@@ -19,14 +36,21 @@ SKIP_AKG_INSTALL=false
 SKIP_LLM_CHECK=false
 FORCE_PREPARE=false
 
-TOOLKIT_ROOT="${TOOLKIT_ROOT:-${WORK_ROOT}/pypto_toolkit}"
-DOWNLOAD_ROOT="${DOWNLOAD_ROOT:-${WORK_ROOT}/pypto_download}"
+TOOLKIT_ROOT="${TOOLKIT_ROOT:-${RUNTIME_ROOT}/toolkit}"
+DOWNLOAD_ROOT="${DOWNLOAD_ROOT:-${RUNTIME_ROOT}/downloads}"
 THIRD_PARTY_PATH="${THIRD_PARTY_PATH:-${DOWNLOAD_ROOT}/third_party_packages}"
-AKG_ROOT="${AKG_ROOT:-${WORK_ROOT}/akg}"
+AKG_ROOT="${AKG_ROOT:-${SOURCE_ROOT}/akg}"
+AKG_GIT_REF_REQUESTED=false
+if [[ -n "${AKG_GIT_REF+x}" ]]; then
+    AKG_GIT_REF_REQUESTED=true
+fi
+AKG_GIT_URL="${AKG_GIT_URL:-https://gitcode.com/mindspore/akg}"
+AKG_GIT_REF="${AKG_GIT_REF:-br_agents}"
 AKG_AGENTS_ROOT="${AKG_AGENTS_ROOT:-${AKG_ROOT}/akg_agents}"
 PTO_ISA_PATH="${PTO_ISA_PATH:-${PYPTO_ROOT}/pto_isa/pto-isa}"
 KERNELBENCH_COMMIT="${KERNELBENCH_COMMIT:-21fbe5a642898cd60b8f60c7aefb43d475e11f33}"
 TEST_TARGET="${TEST_TARGET:-tests/op/bench/test_bench_kernelgen_only.py::test_kernelbench_torch_pypto_kernelgen_only_ascend910b4}"
+AKG_SETTINGS_PATH="${AKG_SETTINGS_PATH:-${HOME_ROOT}/.akg/settings.json}"
 
 PYTEST_EXTRA_ARGS=()
 
@@ -51,17 +75,22 @@ show_help() {
     cat <<EOF
 Usage: $(basename "$0") [options] [-- <extra pytest args>]
 
-This script automates a local PyPTO + AKG Agents benchmark workflow:
-1. Prepare PyPTO third-party packages
-2. Install CANN toolkit into a local path when needed
-3. Export PyPTO-related environment variables
-4. Install PyPTO
-5. Install AKG Agents and initialize KernelBench
-6. Run the target pytest case
+This script automates an isolated PyPTO + AKG Agents benchmark workflow:
+1. Prepare local runtime directories inside this repo
+2. Prepare PyPTO third-party packages
+3. Install CANN toolkit into a local path when needed
+4. Export PyPTO-related environment variables
+5. Install PyPTO into a local virtualenv by default
+6. Install AKG Agents and initialize KernelBench
+7. Run the target pytest case
 
 Options:
-  --python PATH                 Python executable to use (default: ${PYTHON_BIN})
+  --python PATH                 Bootstrap Python used to create the local venv (default: ${BOOTSTRAP_PYTHON_BIN})
+  --venv-root PATH              Local virtualenv directory (default: ${VENV_ROOT})
+  --no-venv                     Disable the local virtualenv and use --python directly
   --pypto-root PATH             Local pypto repository root (default: ${PYPTO_ROOT})
+  --pypto-git-url URL           Clone PyPTO into --pypto-root when missing
+  --pypto-git-ref REF           Checkout this PyPTO branch/tag/commit after clone or on existing git repo
   --device-type a2|a3           Device type for prepare_env.sh (default: ${DEVICE_TYPE})
   --device-id N                 Export DEVICE_ID and TILE_FWK_DEVICE_ID (default: ${DEVICE_ID})
   --pypto-install-mode MODE     wheel|editable (default: ${PYPTO_INSTALL_MODE})
@@ -70,7 +99,10 @@ Options:
   --third-party-path PATH       PYPTO_THIRD_PARTY_PATH (default: ${THIRD_PARTY_PATH})
   --pto-isa-path PATH           PTO_TILE_LIB_CODE_PATH (default: ${PTO_ISA_PATH})
   --akg-root PATH               AKG repo root (default: ${AKG_ROOT})
+  --akg-git-url URL             AKG clone URL when --akg-root is missing (default: ${AKG_GIT_URL})
+  --akg-git-ref REF             AKG branch/tag/commit to use (default: ${AKG_GIT_REF})
   --akg-agents-root PATH        AKG Agents root (default: ${AKG_AGENTS_ROOT})
+  --home-root PATH              Local HOME used by this script (default: ${HOME_ROOT})
   --test-target NODEID          Pytest node id (default: ${TEST_TARGET})
   --run-hello-world             Run examples/00_hello_world/hello_world.py before pytest
   --skip-third-party            Skip prepare_env third_party step
@@ -78,13 +110,14 @@ Options:
   --skip-pypto-requirements     Skip pip install -r python/requirements.txt
   --skip-pypto-install          Skip pip install for PyPTO
   --skip-akg-install            Skip AKG Agents dependency/install steps
-  --skip-llm-check              Do not require ~/.akg/settings.json
+  --skip-llm-check              Do not require local AKG settings or model env vars
   --force-prepare               Re-run prepare steps even if target paths already exist
   -h, --help                    Show this help
 
 Examples:
   $(basename "$0")
   $(basename "$0") --pypto-root /path/to/pypto --device-id 1
+  $(basename "$0") --pypto-git-url <pypto_git_url> --pypto-git-ref main
   $(basename "$0") --pypto-install-mode editable -- --maxfail=1 -x
 EOF
 }
@@ -104,14 +137,54 @@ run_cmd() {
     "$@"
 }
 
+configure_runtime_env() {
+    ensure_dir "${RUNTIME_ROOT}"
+    ensure_dir "${STATE_ROOT}"
+    ensure_dir "${CACHE_ROOT}"
+    ensure_dir "${HOME_ROOT}"
+    ensure_dir "${XDG_CACHE_ROOT}"
+    ensure_dir "${XDG_CONFIG_ROOT}"
+    ensure_dir "${XDG_DATA_ROOT}"
+    ensure_dir "$(dirname "${AKG_SETTINGS_PATH}")"
+
+    export HOME="${HOME_ROOT}"
+    export XDG_CACHE_HOME="${XDG_CACHE_ROOT}"
+    export XDG_CONFIG_HOME="${XDG_CONFIG_ROOT}"
+    export XDG_DATA_HOME="${XDG_DATA_ROOT}"
+    export PIP_CACHE_DIR="${CACHE_ROOT}/pip"
+    export PIP_DISABLE_PIP_VERSION_CHECK=1
+    export AKG_SETTINGS_PATH="${AKG_SETTINGS_PATH}"
+
+    ensure_dir "${PIP_CACHE_DIR}"
+
+    log_info "Using local runtime root: ${RUNTIME_ROOT}"
+    log_info "Using local HOME: ${HOME}"
+}
+
+ensure_python_env() {
+    if [[ "${USE_VENV}" != true ]]; then
+        PYTHON_BIN="${BOOTSTRAP_PYTHON_BIN}"
+        log_warn "Local virtualenv disabled; installs will use ${PYTHON_BIN}"
+        return
+    fi
+
+    if [[ ! -x "${VENV_ROOT}/bin/python" ]]; then
+        ensure_dir "$(dirname "${VENV_ROOT}")"
+        run_cmd "${BOOTSTRAP_PYTHON_BIN}" -m venv "${VENV_ROOT}"
+    fi
+
+    export VIRTUAL_ENV="${VENV_ROOT}"
+    export PATH="${VENV_ROOT}/bin:${PATH}"
+    PYTHON_BIN="${VENV_ROOT}/bin/python"
+    log_info "Using local virtualenv: ${VENV_ROOT}"
+}
+
 resolve_cann_env_script() {
     local candidates=(
         "${TOOLKIT_ROOT}/ascend-toolkit/set_env.sh"
         "${TOOLKIT_ROOT}/cann/set_env.sh"
         "${TOOLKIT_ROOT}/Ascend/ascend-toolkit/set_env.sh"
         "${TOOLKIT_ROOT}/Ascend/cann/set_env.sh"
-        "/usr/local/Ascend/ascend-toolkit/set_env.sh"
-        "/usr/local/Ascend/cann/set_env.sh"
     )
     local candidate
     for candidate in "${candidates[@]}"; do
@@ -129,13 +202,32 @@ parse_args() {
             --python)
                 shift
                 [[ $# -gt 0 ]] || die "--python requires a value"
-                PYTHON_BIN="$1"
+                BOOTSTRAP_PYTHON_BIN="$1"
+                ;;
+            --venv-root)
+                shift
+                [[ $# -gt 0 ]] || die "--venv-root requires a value"
+                VENV_ROOT="$1"
+                ;;
+            --no-venv)
+                USE_VENV=false
                 ;;
             --pypto-root)
                 shift
                 [[ $# -gt 0 ]] || die "--pypto-root requires a value"
                 PYPTO_ROOT="$1"
                 PTO_ISA_PATH="${PYPTO_ROOT}/pto_isa/pto-isa"
+                ;;
+            --pypto-git-url)
+                shift
+                [[ $# -gt 0 ]] || die "--pypto-git-url requires a value"
+                PYPTO_GIT_URL="$1"
+                ;;
+            --pypto-git-ref)
+                shift
+                [[ $# -gt 0 ]] || die "--pypto-git-ref requires a value"
+                PYPTO_GIT_REF_REQUESTED=true
+                PYPTO_GIT_REF="$1"
                 ;;
             --device-type)
                 shift
@@ -179,10 +271,27 @@ parse_args() {
                 AKG_ROOT="$1"
                 AKG_AGENTS_ROOT="${AKG_ROOT}/akg_agents"
                 ;;
+            --akg-git-url)
+                shift
+                [[ $# -gt 0 ]] || die "--akg-git-url requires a value"
+                AKG_GIT_URL="$1"
+                ;;
+            --akg-git-ref)
+                shift
+                [[ $# -gt 0 ]] || die "--akg-git-ref requires a value"
+                AKG_GIT_REF_REQUESTED=true
+                AKG_GIT_REF="$1"
+                ;;
             --akg-agents-root)
                 shift
                 [[ $# -gt 0 ]] || die "--akg-agents-root requires a value"
                 AKG_AGENTS_ROOT="$1"
+                ;;
+            --home-root)
+                shift
+                [[ $# -gt 0 ]] || die "--home-root requires a value"
+                HOME_ROOT="$1"
+                AKG_SETTINGS_PATH="${HOME_ROOT}/.akg/settings.json"
                 ;;
             --test-target)
                 shift
@@ -231,9 +340,6 @@ parse_args() {
 }
 
 validate_args() {
-    [[ -d "${PYPTO_ROOT}" ]] || die "PyPTO root does not exist: ${PYPTO_ROOT}"
-    [[ -f "${PYPTO_ROOT}/tools/prepare_env.sh" ]] || die "Missing ${PYPTO_ROOT}/tools/prepare_env.sh"
-
     case "${DEVICE_TYPE}" in
         a2|a3) ;;
         *)
@@ -247,6 +353,60 @@ validate_args() {
             die "--pypto-install-mode must be wheel or editable"
             ;;
     esac
+}
+
+ensure_git_repo() {
+    local repo_root="$1"
+    local repo_url="$2"
+    local repo_ref="$3"
+    local repo_name="$4"
+    local repo_ref_requested="$5"
+
+    if [[ -d "${repo_root}/.git" ]]; then
+        log_info "Using existing ${repo_name} repo at ${repo_root}"
+        if [[ "${repo_ref_requested}" == true && -n "${repo_ref}" ]]; then
+            run_cmd git -C "${repo_root}" checkout "${repo_ref}"
+        fi
+        return
+    fi
+
+    if [[ -d "${repo_root}" && -n "$(ls -A "${repo_root}" 2>/dev/null)" ]]; then
+        die "${repo_name} root exists but is not a git repo: ${repo_root}"
+    fi
+
+    [[ -n "${repo_url}" ]] || die "${repo_name} repo not found at ${repo_root}. Provide --${repo_name}-git-url or --${repo_name}-root."
+
+    ensure_dir "$(dirname "${repo_root}")"
+    if [[ -n "${repo_ref}" ]]; then
+        run_cmd git clone --branch "${repo_ref}" "${repo_url}" "${repo_root}"
+    else
+        run_cmd git clone "${repo_url}" "${repo_root}"
+    fi
+}
+
+ensure_pypto_repo() {
+    if [[ -f "${PYPTO_ROOT}/tools/prepare_env.sh" ]]; then
+        log_info "Using existing PyPTO repo at ${PYPTO_ROOT}"
+        if [[ "${PYPTO_GIT_REF_REQUESTED}" == true && -n "${PYPTO_GIT_REF}" && -d "${PYPTO_ROOT}/.git" ]]; then
+            run_cmd git -C "${PYPTO_ROOT}" checkout "${PYPTO_GIT_REF}"
+        fi
+        return
+    fi
+
+    if [[ -d "${PYPTO_ROOT}" && -n "$(ls -A "${PYPTO_ROOT}" 2>/dev/null)" ]]; then
+        die "PyPTO root exists but does not look usable: ${PYPTO_ROOT}"
+    fi
+
+    [[ -n "${PYPTO_GIT_URL}" ]] || die "PyPTO repo not found at ${PYPTO_ROOT}. Put a checkout there, pass --pypto-root, or provide --pypto-git-url."
+
+    ensure_dir "$(dirname "${PYPTO_ROOT}")"
+    if [[ -n "${PYPTO_GIT_REF}" ]]; then
+        run_cmd git clone --branch "${PYPTO_GIT_REF}" "${PYPTO_GIT_URL}" "${PYPTO_ROOT}"
+    else
+        run_cmd git clone "${PYPTO_GIT_URL}" "${PYPTO_ROOT}"
+    fi
+
+    [[ -f "${PYPTO_ROOT}/tools/prepare_env.sh" ]] || die "Missing ${PYPTO_ROOT}/tools/prepare_env.sh after PyPTO clone"
 }
 
 prepare_third_party() {
@@ -305,11 +465,11 @@ source_cann_env() {
     fi
 
     if [[ "${SKIP_CANN}" == true ]]; then
-        log_warn "No local CANN env script found. Assuming the shell has already been configured."
+        log_warn "No local CANN env script found under ${TOOLKIT_ROOT}. Assuming the shell has already been configured."
         return
     fi
 
-    die "Cannot find a CANN set_env.sh under ${TOOLKIT_ROOT} or /usr/local/Ascend"
+    die "Cannot find a CANN set_env.sh under ${TOOLKIT_ROOT}"
 }
 
 export_pypto_env() {
@@ -368,13 +528,7 @@ run_hello_world_example() {
 }
 
 ensure_akg_repo() {
-    if [[ -d "${AKG_ROOT}/.git" ]]; then
-        log_info "Using existing AKG repo at ${AKG_ROOT}"
-        return
-    fi
-
-    ensure_dir "$(dirname "${AKG_ROOT}")"
-    run_cmd git clone https://gitcode.com/mindspore/akg -b br_agents "${AKG_ROOT}"
+    ensure_git_repo "${AKG_ROOT}" "${AKG_GIT_URL}" "${AKG_GIT_REF}" "akg" "${AKG_GIT_REF_REQUESTED}"
 }
 
 ensure_kernelbench() {
@@ -412,8 +566,8 @@ check_llm_config() {
         return
     fi
 
-    if [[ -f "${HOME}/.akg/settings.json" ]]; then
-        log_info "Found AKG settings at ${HOME}/.akg/settings.json"
+    if [[ -f "${AKG_SETTINGS_PATH}" ]]; then
+        log_info "Found AKG settings at ${AKG_SETTINGS_PATH}"
         return
     fi
 
@@ -422,7 +576,7 @@ check_llm_config() {
         return
     fi
 
-    die "Missing model configuration. Provide ${HOME}/.akg/settings.json or export AKG_AGENTS_*/AIKG_* model environment variables."
+    die "Missing model configuration. Provide ${AKG_SETTINGS_PATH} or export AKG_AGENTS_*/AIKG_* model environment variables."
 }
 
 install_akg_agents() {
@@ -466,8 +620,14 @@ main() {
 
     require_cmd bash
     require_cmd git
+    require_cmd "${BOOTSTRAP_PYTHON_BIN}"
+
+    configure_runtime_env
+    ensure_python_env
+
     require_cmd "${PYTHON_BIN}"
 
+    ensure_pypto_repo
     prepare_third_party
     prepare_cann
     source_cann_env
