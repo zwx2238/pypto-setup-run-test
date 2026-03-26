@@ -45,12 +45,20 @@ if [[ -n "${AKG_GIT_REF+x}" ]]; then
     AKG_GIT_REF_REQUESTED=true
 fi
 AKG_GIT_URL="${AKG_GIT_URL:-https://gitcode.com/mindspore/akg}"
-AKG_GIT_REF="${AKG_GIT_REF:-br_agents}"
+AKG_GIT_REF="${AKG_GIT_REF:-acf9074a}"
 AKG_AGENTS_ROOT="${AKG_AGENTS_ROOT:-${AKG_ROOT}/akg_agents}"
 PTO_ISA_PATH="${PTO_ISA_PATH:-${PYPTO_ROOT}/pto_isa/pto-isa}"
-KERNELBENCH_COMMIT="${KERNELBENCH_COMMIT:-21fbe5a642898cd60b8f60c7aefb43d475e11f33}"
+KERNELBENCH_ROOT="${KERNELBENCH_ROOT:-${AKG_AGENTS_ROOT}/thirdparty/KernelBench}"
+KERNELBENCH_GIT_URL="${KERNELBENCH_GIT_URL:-https://github.com/KernelBench/KernelBench.git}"
+KERNELBENCH_GIT_REF="${KERNELBENCH_GIT_REF:-21fbe5a642898cd60b8f60c7aefb43d475e11f33}"
 TEST_TARGET="${TEST_TARGET:-tests/op/bench/test_bench_kernelgen_only.py::test_kernelbench_torch_pypto_kernelgen_only_ascend910b4}"
 AKG_SETTINGS_PATH="${AKG_SETTINGS_PATH:-${HOME_ROOT}/.akg/settings.json}"
+KERNELBENCH_PYPTO_ROOT="${KERNELBENCH_PYPTO_ROOT:-}"
+KERNELBENCH_PYPTO_GIT_URL="${KERNELBENCH_PYPTO_GIT_URL:-https://github.com/zwx2238/KernelBench-pypto.git}"
+KERNELBENCH_PYPTO_GIT_REF="${KERNELBENCH_PYPTO_GIT_REF:-}"
+SKIP_KERNELBENCH_PYPTO=false
+PIP_INDEX_URL="${PIP_INDEX_URL:-}"
+ENV_FILE="${ENV_FILE:-${WORK_ROOT}/.env}"
 
 PYTEST_EXTRA_ARGS=()
 
@@ -103,6 +111,12 @@ Options:
   --akg-git-ref REF             AKG branch/tag/commit to use (default: ${AKG_GIT_REF})
   --akg-agents-root PATH        AKG Agents root (default: ${AKG_AGENTS_ROOT})
   --home-root PATH              Local HOME used by this script (default: ${HOME_ROOT})
+  --kernelbench-pypto-root PATH KernelBench-pypto repo root (default: <akg-agents-root>/thirdparty/KernelBench-pypto)
+  --kernelbench-pypto-git-url URL Clone URL for KernelBench-pypto (default: ${KERNELBENCH_PYPTO_GIT_URL})
+  --kernelbench-pypto-git-ref REF Branch/tag/commit for KernelBench-pypto
+  --skip-kernelbench-pypto      Skip KernelBench-pypto clone step
+  --env-file PATH               Path for generated .env file (default: ${ENV_FILE})
+  -i, --index-url URL           pip index URL / mirror (e.g. https://mirrors.aliyun.com/pypi/simple/)
   --test-target NODEID          Pytest node id (default: ${TEST_TARGET})
   --run-hello-world             Run examples/00_hello_world/hello_world.py before pytest
   --skip-third-party            Skip prepare_env third_party step
@@ -154,6 +168,11 @@ configure_runtime_env() {
     export XDG_DATA_HOME="${XDG_DATA_ROOT}"
     export PIP_CACHE_DIR="${CACHE_ROOT}/pip"
     export PIP_DISABLE_PIP_VERSION_CHECK=1
+    if [[ -n "${PIP_INDEX_URL}" ]]; then
+        export PIP_INDEX_URL="${PIP_INDEX_URL}"
+        export PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-$(printf '%s' "${PIP_INDEX_URL}" | sed -E 's|https?://([^/:]+).*|\1|')}"
+        log_info "Using pip mirror: ${PIP_INDEX_URL}"
+    fi
     export AKG_SETTINGS_PATH="${AKG_SETTINGS_PATH}"
 
     ensure_dir "${PIP_CACHE_DIR}"
@@ -293,6 +312,34 @@ parse_args() {
                 [[ $# -gt 0 ]] || die "--home-root requires a value"
                 HOME_ROOT="$1"
                 AKG_SETTINGS_PATH="${HOME_ROOT}/.akg/settings.json"
+                ;;
+            --kernelbench-pypto-root)
+                shift
+                [[ $# -gt 0 ]] || die "--kernelbench-pypto-root requires a value"
+                KERNELBENCH_PYPTO_ROOT="$1"
+                ;;
+            --kernelbench-pypto-git-url)
+                shift
+                [[ $# -gt 0 ]] || die "--kernelbench-pypto-git-url requires a value"
+                KERNELBENCH_PYPTO_GIT_URL="$1"
+                ;;
+            --kernelbench-pypto-git-ref)
+                shift
+                [[ $# -gt 0 ]] || die "--kernelbench-pypto-git-ref requires a value"
+                KERNELBENCH_PYPTO_GIT_REF="$1"
+                ;;
+            --skip-kernelbench-pypto)
+                SKIP_KERNELBENCH_PYPTO=true
+                ;;
+            --env-file)
+                shift
+                [[ $# -gt 0 ]] || die "--env-file requires a value"
+                ENV_FILE="$1"
+                ;;
+            -i|--index-url)
+                shift
+                [[ $# -gt 0 ]] || die "-i/--index-url requires a value"
+                PIP_INDEX_URL="$1"
                 ;;
             --test-target)
                 shift
@@ -529,21 +576,90 @@ ensure_akg_repo() {
 }
 
 ensure_kernelbench() {
-    local kernelbench_root="${AKG_AGENTS_ROOT}/thirdparty/KernelBench"
+    KERNELBENCH_ROOT="${KERNELBENCH_ROOT:-${AKG_AGENTS_ROOT}/thirdparty/KernelBench}"
 
-    run_cmd git -C "${AKG_ROOT}" submodule update --init "akg_agents/thirdparty/*"
-
-    if [[ ! -d "${kernelbench_root}" ]]; then
-        die "KernelBench not found after submodule init: ${kernelbench_root}"
-    fi
-
-    if [[ -d "${kernelbench_root}/.git" ]]; then
-        local current_commit
-        current_commit="$(git -C "${kernelbench_root}" rev-parse HEAD)"
-        if [[ "${current_commit}" != "${KERNELBENCH_COMMIT}" ]]; then
-            run_cmd git -C "${kernelbench_root}" checkout "${KERNELBENCH_COMMIT}"
+    if [[ -d "${KERNELBENCH_ROOT}" && -n "$(ls -A "${KERNELBENCH_ROOT}" 2>/dev/null)" ]]; then
+        log_info "Using existing KernelBench at ${KERNELBENCH_ROOT}"
+        if [[ -n "${KERNELBENCH_GIT_REF}" && -d "${KERNELBENCH_ROOT}/.git" ]]; then
+            local current_commit
+            current_commit="$(git -C "${KERNELBENCH_ROOT}" rev-parse HEAD)"
+            if [[ "${current_commit}" != "${KERNELBENCH_GIT_REF}" ]]; then
+                run_cmd git -C "${KERNELBENCH_ROOT}" checkout "${KERNELBENCH_GIT_REF}"
+            fi
         fi
+        return
     fi
+
+    ensure_dir "$(dirname "${KERNELBENCH_ROOT}")"
+    run_cmd git clone "${KERNELBENCH_GIT_URL}" "${KERNELBENCH_ROOT}"
+    if [[ -n "${KERNELBENCH_GIT_REF}" ]]; then
+        run_cmd git -C "${KERNELBENCH_ROOT}" checkout "${KERNELBENCH_GIT_REF}"
+    fi
+}
+
+ensure_kernelbench_pypto() {
+    if [[ "${SKIP_KERNELBENCH_PYPTO}" == true ]]; then
+        log_info "Skipping KernelBench-pypto step"
+        return
+    fi
+
+    KERNELBENCH_PYPTO_ROOT="${KERNELBENCH_PYPTO_ROOT:-${AKG_AGENTS_ROOT}/thirdparty/KernelBench-pypto}"
+
+    if [[ -d "${KERNELBENCH_PYPTO_ROOT}" && -n "$(ls -A "${KERNELBENCH_PYPTO_ROOT}" 2>/dev/null)" ]]; then
+        log_info "Using existing KernelBench-pypto at ${KERNELBENCH_PYPTO_ROOT}"
+        if [[ -n "${KERNELBENCH_PYPTO_GIT_REF}" && -d "${KERNELBENCH_PYPTO_ROOT}/.git" ]]; then
+            run_cmd git -C "${KERNELBENCH_PYPTO_ROOT}" checkout "${KERNELBENCH_PYPTO_GIT_REF}"
+        fi
+        return
+    fi
+
+    ensure_dir "$(dirname "${KERNELBENCH_PYPTO_ROOT}")"
+    run_cmd git clone "${KERNELBENCH_PYPTO_GIT_URL}" "${KERNELBENCH_PYPTO_ROOT}"
+    if [[ -n "${KERNELBENCH_PYPTO_GIT_REF}" ]]; then
+        run_cmd git -C "${KERNELBENCH_PYPTO_ROOT}" checkout "${KERNELBENCH_PYPTO_GIT_REF}"
+    fi
+}
+
+generate_env_file() {
+    KERNELBENCH_PYPTO_ROOT="${KERNELBENCH_PYPTO_ROOT:-${AKG_AGENTS_ROOT}/thirdparty/KernelBench-pypto}"
+
+    local cann_env_script=""
+    cann_env_script="$(resolve_cann_env_script 2>/dev/null)" || true
+
+    log_info "Generating env file: ${ENV_FILE}"
+    {
+        printf '# Generated by setup_and_run_test.sh at %s\n' "$(date -Iseconds)"
+        printf '# Usage from bash:  set -a; source %s; set +a\n' "${ENV_FILE}"
+        printf '# Usage from Python: kernel_verifier_pypto.py loads this automatically.\n\n'
+
+        printf 'VIRTUAL_ENV=%s\n' "${VENV_ROOT}"
+        printf 'PYTHON_BIN=%s\n' "${PYTHON_BIN}"
+        printf 'AKG_AGENTS_ROOT=%s\n' "${AKG_AGENTS_ROOT}"
+        printf 'KERNELBENCH_PYPTO_ROOT=%s\n' "${KERNELBENCH_PYPTO_ROOT}"
+        printf 'PYPTO_THIRD_PARTY_PATH=%s\n' "${THIRD_PARTY_PATH}"
+        printf 'DEVICE_ID=%s\n' "${DEVICE_ID}"
+        printf 'TILE_FWK_DEVICE_ID=%s\n' "${DEVICE_ID}"
+        printf 'AKG_SETTINGS_PATH=%s\n' "${AKG_SETTINGS_PATH}"
+        printf 'HOME=%s\n' "${HOME}"
+
+        if [[ -n "${PTO_TILE_LIB_CODE_PATH:-}" ]]; then
+            printf 'PTO_TILE_LIB_CODE_PATH=%s\n' "${PTO_TILE_LIB_CODE_PATH}"
+        fi
+
+        if [[ -n "${cann_env_script}" ]]; then
+            printf 'CANN_ENV_SCRIPT=%s\n' "${cann_env_script}"
+        fi
+
+        local var
+        for var in ASCEND_HOME_PATH ASCEND_TOOLKIT_HOME ASCEND_AICPU_PATH \
+                   TOOLCHAIN_HOME ASCEND_OPP_PATH LD_LIBRARY_PATH PYTHONPATH PATH; do
+            if [[ -n "${!var:-}" ]]; then
+                printf '%s=%s\n' "${var}" "${!var}"
+            fi
+        done
+    } > "${ENV_FILE}"
+
+    log_info "Env file written: ${ENV_FILE}"
 }
 
 source_akg_env_file() {
@@ -634,9 +750,11 @@ main() {
 
     ensure_akg_repo
     ensure_kernelbench
+    ensure_kernelbench_pypto
     source_akg_env_file
     check_llm_config
     install_akg_agents
+    generate_env_file
     run_test
 }
 
