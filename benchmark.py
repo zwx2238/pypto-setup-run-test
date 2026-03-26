@@ -275,7 +275,7 @@ def _save_results_to_csv(results, run_profile, csv_path):
             writer.writerow(row)
 
 
-async def kernel_verifier_pypto_ascend910b4_torch(
+async def benchmark_pypto_ascend910b4_torch(
     idx,
     category=None,
     parallel=1,
@@ -626,7 +626,7 @@ async def kernel_verifier_pypto_ascend910b4_torch(
         rows.append(row)
     print(tabulate(rows, headers=headers, tablefmt="fancy_grid"))
 
-    csv_output_path = os.path.abspath("kernel_verifier_pypto_results.csv")
+    csv_output_path = os.path.abspath("benchmark_results.csv")
 
     _save_results_to_csv(results, run_profile, csv_output_path)
     print(f"结果已保存到 CSV: {csv_output_path}")
@@ -835,7 +835,7 @@ if __name__ == "__main__":
             parser.error("--devices: device list is empty")
 
     asyncio.run(
-        kernel_verifier_pypto_ascend910b4_torch(
+        benchmark_pypto_ascend910b4_torch(
             idx_list,
             category_list,
             parallel=args.parallel,
