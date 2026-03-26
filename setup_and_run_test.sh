@@ -49,7 +49,7 @@ AKG_GIT_REF="${AKG_GIT_REF:-acf9074a}"
 AKG_AGENTS_ROOT="${AKG_AGENTS_ROOT:-${AKG_ROOT}/akg_agents}"
 PTO_ISA_PATH="${PTO_ISA_PATH:-${PYPTO_ROOT}/pto_isa/pto-isa}"
 KERNELBENCH_ROOT="${KERNELBENCH_ROOT:-${AKG_AGENTS_ROOT}/thirdparty/KernelBench}"
-KERNELBENCH_GIT_URL="${KERNELBENCH_GIT_URL:-https://github.com/KernelBench/KernelBench.git}"
+KERNELBENCH_GIT_URL="${KERNELBENCH_GIT_URL:-https://github.com/ScalingIntelligence/KernelBench.git}"
 KERNELBENCH_GIT_REF="${KERNELBENCH_GIT_REF:-21fbe5a642898cd60b8f60c7aefb43d475e11f33}"
 TEST_TARGET="${TEST_TARGET:-tests/op/bench/test_bench_kernelgen_only.py::test_kernelbench_torch_pypto_kernelgen_only_ascend910b4}"
 AKG_SETTINGS_PATH="${AKG_SETTINGS_PATH:-${HOME_ROOT}/.akg/settings.json}"
@@ -496,19 +496,18 @@ prepare_cann() {
 source_cann_env() {
     local env_script=""
 
-    if [[ -n "${ASCEND_HOME_PATH:-}" || -n "${ASCEND_TOOLKIT_HOME:-}" ]]; then
-        log_info "Ascend environment already present in current shell"
-        return
-    fi
-
     if env_script="$(resolve_cann_env_script 2>/dev/null)"; then
-        log_info "Sourcing CANN environment: ${env_script}"
+        log_info "Sourcing local CANN environment: ${env_script}"
         # shellcheck disable=SC1090
         source "${env_script}"
         return
     fi
 
     if [[ "${SKIP_CANN}" == true ]]; then
+        if [[ -n "${ASCEND_HOME_PATH:-}" || -n "${ASCEND_TOOLKIT_HOME:-}" ]]; then
+            log_warn "No local CANN under ${TOOLKIT_ROOT}; using pre-existing Ascend environment from shell."
+            return
+        fi
         log_warn "No local CANN env script found under ${TOOLKIT_ROOT}. Assuming the shell has already been configured."
         return
     fi
