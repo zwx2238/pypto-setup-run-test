@@ -699,6 +699,9 @@ install_akg_agents() {
     if [[ "${SKIP_AKG_INSTALL}" != true ]]; then
         pushd "${AKG_AGENTS_ROOT}" >/dev/null
         run_cmd "${PYTHON_BIN}" -m pip install -r requirements.txt
+        if [[ -f requirements_triton_ascend.txt ]]; then
+            run_cmd "${PYTHON_BIN}" -m pip install -r requirements_triton_ascend.txt
+        fi
         run_cmd "${PYTHON_BIN}" -m pip install -e . --no-build-isolation
         popd >/dev/null
     else
