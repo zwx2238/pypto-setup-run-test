@@ -28,6 +28,7 @@ DEVICE_TYPE="a2"
 DEVICE_ID="${DEVICE_ID:-0}"
 PYPTO_INSTALL_MODE="wheel"
 RUN_HELLO_WORLD=false
+SKIP_TORCH=false
 SKIP_THIRD_PARTY=false
 SKIP_CANN=false
 SKIP_PYPTO_REQUIREMENTS=false
@@ -35,6 +36,8 @@ SKIP_PYPTO_INSTALL=false
 SKIP_AKG_INSTALL=false
 SKIP_LLM_CHECK=false
 FORCE_PREPARE=false
+SMOKE_TEST=false
+TORCH_PACKAGES="${TORCH_PACKAGES:-torch torch_npu}"
 
 TOOLKIT_ROOT="${TOOLKIT_ROOT:-${RUNTIME_ROOT}/toolkit}"
 DOWNLOAD_ROOT="${DOWNLOAD_ROOT:-${RUNTIME_ROOT}/downloads}"
@@ -119,6 +122,8 @@ Options:
   -i, --index-url URL           pip index URL / mirror (e.g. https://mirrors.aliyun.com/pypi/simple/)
   --test-target NODEID          Pytest node id (default: ${TEST_TARGET})
   --run-hello-world             Run examples/00_hello_world/hello_world.py before pytest
+  --torch-packages "PKG ..."    Packages for torch install step (default: "${TORCH_PACKAGES}")
+  --skip-torch                  Skip torch/torch_npu install
   --skip-third-party            Skip prepare_env third_party step
   --skip-cann                   Skip prepare_env cann step
   --skip-pypto-requirements     Skip pip install -r python/requirements.txt
@@ -126,6 +131,7 @@ Options:
   --skip-akg-install            Skip AKG Agents dependency/install steps
   --skip-llm-check              Do not require local AKG settings or model env vars
   --force-prepare               Re-run prepare steps even if target paths already exist
+  --smoke-test                  Skip all clone/install/prepare steps; only set up env and run test
   -h, --help                    Show this help
 
 Examples:
@@ -349,6 +355,14 @@ parse_args() {
             --run-hello-world)
                 RUN_HELLO_WORLD=true
                 ;;
+            --torch-packages)
+                shift
+                [[ $# -gt 0 ]] || die "--torch-packages requires a value"
+                TORCH_PACKAGES="$1"
+                ;;
+            --skip-torch)
+                SKIP_TORCH=true
+                ;;
             --skip-third-party)
                 SKIP_THIRD_PARTY=true
                 ;;
@@ -369,6 +383,9 @@ parse_args() {
                 ;;
             --force-prepare)
                 FORCE_PREPARE=true
+                ;;
+            --smoke-test)
+                SMOKE_TEST=true
                 ;;
             -h|--help)
                 show_help
@@ -536,6 +553,16 @@ export_pypto_env() {
     if [[ -n "${PTO_TILE_LIB_CODE_PATH:-}" ]]; then
         log_info "PTO_TILE_LIB_CODE_PATH=${PTO_TILE_LIB_CODE_PATH}"
     fi
+}
+
+install_torch() {
+    if [[ "${SKIP_TORCH}" == true ]]; then
+        log_info "Skipping torch install"
+        return
+    fi
+
+    # shellcheck disable=SC2086
+    run_cmd "${PYTHON_BIN}" -m pip install ${TORCH_PACKAGES}
 }
 
 install_pypto() {
@@ -742,11 +769,22 @@ main() {
 
     require_cmd "${PYTHON_BIN}"
 
+    if [[ "${SMOKE_TEST}" == true ]]; then
+        log_info "Smoke-test mode: skipping all clone/install/prepare steps"
+        source_cann_env
+        export_pypto_env
+        source_akg_env_file
+        generate_env_file
+        run_test
+        return
+    fi
+
     ensure_pypto_repo
     prepare_third_party
     prepare_cann
     source_cann_env
     export_pypto_env
+    install_torch
     install_pypto
     run_hello_world_example
 
